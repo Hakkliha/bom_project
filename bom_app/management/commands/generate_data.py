@@ -10,9 +10,47 @@ import django.db.models as models
 
 class Command(BaseCommand):
     help = "Generate synthetic parts, assemblies, BOMs, routings & costs"
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--items', type=int, default=10, 
+                            help='Number of final items per complexity type (simple, moderate, complex)')
 
     def handle(self, *args, **options):
         random.seed(time.time())
+        
+        # Get the configuration parameter
+        items_per_type = options['items']
+        total_final_items = items_per_type * 3  # Equal number of simple, moderate, and complex
+        
+        # Calculate number of parts needed - scale based on final items
+        # Base formula: 500 parts for 30 final items (10 of each type)
+        # This gives approximately 16.67 parts per final item
+        parts_per_final_item = 16.67
+        num_parts = int(total_final_items * parts_per_final_item)
+        
+        # Calculate number of assemblies needed
+        # We need enough to cover all final items plus sub-assemblies
+        # For moderate items: each needs 1-3 sub-assemblies
+        # For complex items: each needs 2-5 level-1 subs, and some of those need level-2 subs
+        # Using conservative estimates:
+        avg_subs_per_moderate = 2  # Average of 1-3
+        avg_subs_per_complex_l1 = 3.5  # Average of 2-5
+        avg_subs_per_complex_l2 = 1.5  # Not all level-1 will have level-2 subs
+        
+        # Estimate total assemblies needed
+        total_assemblies_needed = (
+            items_per_type +  # Simple items
+            items_per_type + (items_per_type * avg_subs_per_moderate) +  # Moderate items and their subs
+            items_per_type + (items_per_type * avg_subs_per_complex_l1) +  # Complex items and their L1 subs
+            (items_per_type * avg_subs_per_complex_l1 * 0.7 * avg_subs_per_complex_l2)  # L2 subs (70% of L1 have L2)
+        )
+        # Add some buffer (20%)
+        total_assemblies_needed = int(total_assemblies_needed * 1.2)
+        
+        self.stdout.write(f"Generating data with {items_per_type} items of each complexity type")
+        self.stdout.write(f"Total final items: {total_final_items}")
+        self.stdout.write(f"Estimated parts needed: {num_parts}")
+        self.stdout.write(f"Estimated assemblies needed: {total_assemblies_needed}")
 
         # 1) Wipe out old data
         Item.objects.all().delete()
@@ -47,7 +85,7 @@ class Command(BaseCommand):
         ]
 
         parts = []
-        for i in range(1, 501):
+        for i in range(1, num_parts + 1):
             category = random.choice(part_categories)
             p = Item.objects.create(
                 item_no=f"P{i:04d}",
@@ -62,7 +100,8 @@ class Command(BaseCommand):
         # Track the next available assembly number
         next_assembly_num = 1
         
-        for i in range(1, 101):
+        # Create initial pool of assemblies
+        for i in range(1, total_assemblies_needed + 1):
             a = Item.objects.create(
                 item_no=f"A{next_assembly_num:03d}",
                 description=f"Assembly A{next_assembly_num:03d}",
@@ -102,11 +141,13 @@ class Command(BaseCommand):
         
         # Create simple BOMs (parts only, min 2 parts)
         simple_products = []
-        for i in range(10):
+        for i in range(items_per_type):
             if not available_assemblies:
-                break
+                # Create more assemblies if needed
+                assembly = create_new_assembly()
+            else:
+                assembly = available_assemblies.pop(0)
                 
-            assembly = available_assemblies.pop(0)
             simple_products.append(assembly)
             used_assemblies.add(assembly.item_no)
             
@@ -133,11 +174,13 @@ class Command(BaseCommand):
         
         # Create moderate BOMs (must include at least one sub-assembly)
         moderate_products = []
-        for i in range(10):
+        for i in range(items_per_type):
             if not available_assemblies:
-                break
+                # Create more assemblies if needed
+                assembly = create_new_assembly()
+            else:
+                assembly = available_assemblies.pop(0)
                 
-            assembly = available_assemblies.pop(0)
             moderate_products.append(assembly)
             used_assemblies.add(assembly.item_no)
             
@@ -167,13 +210,10 @@ class Command(BaseCommand):
             available_subs = [a for a in available_assemblies if a.item_no not in used_assemblies]
             
             if len(available_subs) < n_subs:
-                n_subs = len(available_subs)
-                
-            if n_subs == 0:
-                # If we run out of assemblies, create a new one
-                new_sub = create_new_assembly()
-                available_subs = [new_sub]
-                n_subs = 1
+                # Create more assemblies if needed
+                needed = n_subs - len(available_subs)
+                for _ in range(needed):
+                    available_subs.append(create_new_assembly())
             
             sub_comps = random.sample(available_subs, k=n_subs)
             
@@ -213,11 +253,13 @@ class Command(BaseCommand):
         
         # Create complex BOMs (must have sub-assemblies with their own sub-assemblies)
         complex_products = []
-        for i in range(10):
+        for i in range(items_per_type):
             if not available_assemblies:
-                break
+                # Create more assemblies if needed
+                assembly = create_new_assembly()
+            else:
+                assembly = available_assemblies.pop(0)
                 
-            assembly = available_assemblies.pop(0)
             complex_products.append(assembly)
             used_assemblies.add(assembly.item_no)
             
@@ -249,10 +291,8 @@ class Command(BaseCommand):
             if len(available_subs) < n_subs:
                 # Create more assemblies if needed
                 needed = n_subs - len(available_subs)
-                new_subs = []
                 for _ in range(needed):
-                    new_subs.append(create_new_assembly())
-                available_subs.extend(new_subs)
+                    available_subs.append(create_new_assembly())
             
             level1_subs = random.sample(available_subs, k=n_subs)
             
@@ -478,6 +518,7 @@ class Command(BaseCommand):
             item.process_cost = getattr(item, 'process_cost', 0.0) + total_proc
             item.save(update_fields=['process_cost'])
 
+
         # 8) Bottom‑up total cost roll‑up
         with transaction.atomic():
             # First, set total_cost = base_cost + process_cost for all parts
@@ -488,19 +529,33 @@ class Command(BaseCommand):
             # Then do the assembly roll-up by depth
             max_bom_depth = BOM.objects.aggregate(m=models.Max('depth'))['m'] or 0
             for d in range(max_bom_depth, -1, -1):
-                boms_at_d = BOM.objects.filter(depth=d).select_related('parent').prefetch_related('lines__component')
-                for bom in boms_at_d:
-                    parent = bom.parent
-                    # Skip if this is a manufacturing BOM for a part (already handled above)
-                    if bom.complexity == "part":
-                        continue
+                # Get all BOMs at this depth
+                boms_at_d_ids = list(BOM.objects.filter(depth=d).values_list('id', flat=True))
+                
+                # Process in batches to avoid SQLite's "too many SQL variables" error
+                batch_size = 100  # Adjust this based on your needs
+                for i in range(0, len(boms_at_d_ids), batch_size):
+                    batch_ids = boms_at_d_ids[i:i+batch_size]
+                    
+                    # Process this batch
+                    boms_batch = BOM.objects.filter(id__in=batch_ids).select_related('parent')
+                    
+                    for bom in boms_batch:
+                        parent = bom.parent
+                        # Skip if this is a manufacturing BOM for a part (already handled above)
+                        if bom.complexity == "part":
+                            continue
                         
-                    comp_cost = 0.0
-                    for line in bom.lines.all():
-                        comp = line.component
-                        comp_cost += comp.total_cost * line.quantity
-                    # total_cost = base_cost + process_cost + component costs
-                    parent.total_cost = parent.base_cost + parent.process_cost + comp_cost
-                    parent.save(update_fields=['total_cost'])
+                        # Get all lines for this BOM
+                        lines = BOMLine.objects.filter(bom=bom).select_related('component')
+                        
+                        comp_cost = 0.0
+                        for line in lines:
+                            comp = line.component
+                            comp_cost += comp.total_cost * line.quantity
+                        
+                        # total_cost = base_cost + process_cost + component costs
+                        parent.total_cost = parent.base_cost + parent.process_cost + comp_cost
+                        parent.save(update_fields=['total_cost'])
 
-        self.stdout.write(self.style.SUCCESS("Data generation complete."))
+        self.stdout.write(self.style.SUCCESS(f"Data generation complete with {items_per_type} items of each complexity type."))
