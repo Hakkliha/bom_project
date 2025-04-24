@@ -1,0 +1,17 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BOM Visualizer</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+  <h1>BOM Complexity Visualizer</h1>
+  <button onclick="draw('simple')">Simple</button>
+  <button onclick="draw('moderate')">Moderate</button>
+  <button onclick="draw('complex')">Complex</button>
+  <svg id="chart" width="1920" height="800"></svg>
+  <script src="{% static 'bom_app/bom_viz.js' %}"></script>
+</body>
+</html>

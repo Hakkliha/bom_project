@@ -1,0 +1,12 @@
+version: '3'
+services:
+  web:
+    build: .
+    ports: ["8000:8000"]
+    depends_on: ["db"]
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: bomdb
+      POSTGRES_USER: bomuser
+      POSTGRES_PASSWORD: secret

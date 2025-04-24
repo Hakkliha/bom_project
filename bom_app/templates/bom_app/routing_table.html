@@ -1,0 +1,270 @@
+<!-- templates/bom_app/routing_table.html -->
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BOM Visualizer</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>{{ title }}</h1>
+        <p>{{ description }}</p>
+        
+        <div class="mb-3">
+            <button class="btn btn-primary" id="load-simple">Simple BOM</button>
+            <button class="btn btn-primary" id="load-moderate">Moderate BOM</button>
+            <button class="btn btn-primary" id="load-complex">Complex BOM</button>
+        </div>
+        
+        <div id="bom-info" class="mb-3"></div>
+        
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover" id="routing-table">
+                <thead>
+                    <tr>
+                        <th>Level</th>
+                        <th>Item</th>
+                        <th>Description</th>
+                        <th>Type</th>
+                        <!-- Work center headers will be added dynamically -->
+                        <th>Total Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Table rows will be populated via JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loadButtons = ['load-simple', 'load-moderate', 'load-complex'];
+            loadButtons.forEach(buttonId => {
+                document.getElementById(buttonId).addEventListener('click', function() {
+                    const complexity = buttonId.split('-')[1];
+                    loadRoutingTable(complexity);
+                });
+            });
+            
+            // Load a simple BOM by default
+            loadRoutingTable('simple');
+        });
+        
+        function loadRoutingTable(complexity) {
+            fetch(`/api/bom-routing/${complexity}/`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Routing data:', data);
+                    renderRoutingTable(data);
+                })
+                .catch(error => {
+                    console.error('Error loading routing data:', error);
+                });
+        }
+        
+        function renderRoutingTable(data) {
+            const tableHead = document.querySelector('#routing-table thead tr');
+            const tableBody = document.querySelector('#routing-table tbody');
+            const bomInfo = document.querySelector('#bom-info');
+            
+            // Reset the table headers to only include the basic columns (without Total Time)
+            tableHead.innerHTML = `
+                <th>Level</th>
+                <th>Item</th>
+                <th>Description</th>
+                <th>Type</th>
+            `;
+            
+            tableBody.innerHTML = '';
+            
+            // Filter out duplicate work centers
+            const uniqueWorkCenters = [];
+            const seenWcNos = new Set();
+            
+            data.work_centers.forEach(wc => {
+                if (!seenWcNos.has(wc.wc_no)) {
+                    seenWcNos.add(wc.wc_no);
+                    uniqueWorkCenters.push(wc);
+                }
+            });
+            
+            // Add work center columns
+            uniqueWorkCenters.forEach(wc => {
+                const th = document.createElement('th');
+                th.textContent = `${wc.wc_no} - ${wc.name}`;
+                tableHead.appendChild(th);
+            });
+            
+            // Display BOM info
+            bomInfo.innerHTML = `<strong>Assembly:</strong> ${data.routing_data.item_no} - ${data.routing_data.description}`;
+            
+            // Initialize column totals
+            const columnTotals = {};
+            uniqueWorkCenters.forEach(wc => {
+                columnTotals[wc.wc_no] = 0;
+            });
+            
+            // Recursively render rows and collect column totals
+            renderRowAndCollectTotals(data.routing_data, uniqueWorkCenters, tableBody, columnTotals, []);
+            
+            // Add a totals row
+            addTotalsRow(tableBody, uniqueWorkCenters, columnTotals);
+            
+            // Add hover effect for better readability
+            document.querySelectorAll('#routing-table tbody tr').forEach(row => {
+                row.addEventListener('mouseover', function() {
+                    this.style.backgroundColor = '#f5f5f5';
+                });
+                row.addEventListener('mouseout', function() {
+                    this.style.backgroundColor = '';
+                });
+            });
+        
+            // Add sorting capability
+            document.querySelectorAll('#routing-table thead th').forEach((th, index) => {
+                if (index >= 4) { // Only work center columns
+                    th.style.cursor = 'pointer';
+                    th.addEventListener('click', function() {
+                        sortTableByColumn(index);
+                    });
+                }
+            });
+        }
+        
+        function renderRowAndCollectTotals(item, workCenters, tableBody, columnTotals, isLastChild = []) {
+            const row = document.createElement('tr');
+            
+            // Indentation for the hierarchy
+            const levelCell = document.createElement('td');
+            levelCell.textContent = item.level;
+            row.appendChild(levelCell);
+            
+            // Item number cell
+            const itemCell = document.createElement('td');
+            
+            // Create indentation based on level
+            let prefix = '';
+            for (let i = 0; i < item.level; i++) {
+                if (i === item.level - 1) {
+                    prefix += isLastChild[i] ? '└─ ' : '├─ ';
+                } else {
+                    prefix += isLastChild[i] ? '   ' : '│  ';
+                }
+            }
+            
+            itemCell.textContent = prefix + item.item_no;
+            row.appendChild(itemCell);
+            
+            // Description cell
+            const descCell = document.createElement('td');
+            descCell.textContent = item.description;
+            row.appendChild(descCell);
+            
+            // Type cell
+            const typeCell = document.createElement('td');
+            typeCell.textContent = item.item_type === 'A' ? 'Assembly' : 'Part';
+            row.appendChild(typeCell);
+            
+            // Work center cells and update column totals
+            workCenters.forEach(wc => {
+                const wcCell = document.createElement('td');
+                const time = item.work_centers[wc.wc_no] || 0;
+                
+                // Update column total
+                columnTotals[wc.wc_no] += time;
+                
+                wcCell.textContent = time > 0 ? time : '';
+                row.appendChild(wcCell);
+            });
+            
+            tableBody.appendChild(row);
+            
+            // Render children recursively
+            if (item.children && item.children.length > 0) {
+                for (let i = 0; i < item.children.length; i++) {
+                    const childIsLast = i === item.children.length - 1;
+                    const newIsLastChild = [...isLastChild];
+                    newIsLastChild[item.level] = childIsLast;
+                    renderRowAndCollectTotals(item.children[i], workCenters, tableBody, columnTotals, newIsLastChild);
+                }
+            }
+        }
+        
+        function addTotalsRow(tableBody, workCenters, columnTotals) {
+            const totalRow = document.createElement('tr');
+            totalRow.classList.add('table-active');
+            totalRow.style.borderTop = "2px solid #333";
+            
+            // Level cell (empty)
+            const levelCell = document.createElement('td');
+            totalRow.appendChild(levelCell);
+            
+            // Item number cell with "TOTALS" label
+            const itemCell = document.createElement('td');
+            itemCell.textContent = "TOTALS";
+            itemCell.style.fontWeight = "bold";
+            totalRow.appendChild(itemCell);
+            
+            // Description cell (empty)
+            const descCell = document.createElement('td');
+            totalRow.appendChild(descCell);
+            
+            // Type cell (empty)
+            const typeCell = document.createElement('td');
+            totalRow.appendChild(typeCell);
+            
+            // Work center total cells
+            let grandTotal = 0;
+            workCenters.forEach(wc => {
+                const wcTotalCell = document.createElement('td');
+                const total = columnTotals[wc.wc_no];
+                grandTotal += total;
+                
+                wcTotalCell.textContent = total > 0 ? total : '';
+                wcTotalCell.style.fontWeight = "bold";
+                totalRow.appendChild(wcTotalCell);
+            });
+            
+            // No need for grand total cell as we've removed the Total Time column
+            
+            tableBody.appendChild(totalRow);
+        }
+        
+        function sortTableByColumn(colIndex) {
+            const table = document.getElementById('routing-table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr:not(:last-child)')); // Exclude the totals row
+            const totalRow = tbody.querySelector('tr:last-child');
+            
+            // Get current sort direction
+            const currentDir = table.getAttribute('data-sort-dir') === 'asc' ? 'desc' : 'asc';
+            table.setAttribute('data-sort-dir', currentDir);
+            
+            // Sort the rows
+            const sortedRows = rows.sort((a, b) => {
+                const aValue = parseInt(a.children[colIndex].textContent) || 0;
+                const bValue = parseInt(b.children[colIndex].textContent) || 0;
+                
+                return currentDir === 'asc' ? aValue - bValue : bValue - aValue;
+            });
+            
+            // Clear the table
+            tbody.innerHTML = '';
+            
+            // Add the sorted rows
+            sortedRows.forEach(row => tbody.appendChild(row));
+            
+            // Add the totals row back at the end
+            tbody.appendChild(totalRow);
+            
+            // Update the header to indicate the sorting
+            const headers = table.querySelectorAll('th');
+            headers.forEach(header => header.classList.remove('sorted-asc', 'sorted-desc'));
+            headers[colIndex].classList.add(currentDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        }
+    </script>
+</body>
+</html>
