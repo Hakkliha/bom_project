@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',  # Django REST framework
+    'simulation',  # Your simulation app name here
     'bom_app',  # Your app name here
 ]
 
