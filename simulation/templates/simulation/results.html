@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulation Results</title>
+</head>
+<body>
+    <h2>Simulation Results</h2>
+    <p>Average Quote Time: {{ avg_time }} s</p>
+    <p>Average Errors per Quote: {{ avg_errors }}</p>
+    
+    <table border="1">
+      <tr>
+        <th>Product</th>
+        <th>Total Time (s)</th>
+        <th>Entries</th>
+        <th>Errors</th>
+      </tr>
+      {% for r in results %}
+        <tr>
+          <td>{{ r.product_name }}</td>
+          <td>{{ r.total_time|floatformat:2 }}</td>
+          <td>{{ r.entries }}</td>
+          <td>{{ r.errors }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    
+</body>
