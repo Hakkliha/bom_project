@@ -42,6 +42,19 @@ class BOM(models.Model):
     depth     = models.IntegerField()
     complexity= models.CharField(max_length=10)
 
+    def json_representation(self):
+        """Return a JSON representation of the BOM"""
+        return {
+            'bom_no': self.bom_no,
+            'parent': self.parent.item_no,
+            'depth': self.depth,
+            'complexity': self.complexity,
+            'lines': [{
+                'component': line.component.item_no,
+                'quantity': line.quantity
+            } for line in self.lines.all()]
+        }
+
 class BOMLine(models.Model):
     bom        = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='lines')
     component  = models.ForeignKey(Item, on_delete=models.CASCADE)

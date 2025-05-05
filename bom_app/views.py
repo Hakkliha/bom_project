@@ -25,8 +25,7 @@ def build_tree(item_no, level=0, max_nodes=200):
             )
     return data
 
-@api_view(['GET'])
-def bom_tree(request, complexity):
+def retrieve_top_level_item(complexity):
     """
     Retrieves a random top-level BOM of the specified complexity
     """
@@ -45,10 +44,20 @@ def bom_tree(request, complexity):
     top_level_item_nos = set(parent_assemblies) - set(sub_assemblies)
     
     if not top_level_item_nos:
-        return Response({"error": f"No top-level assemblies found with complexity '{complexity}'"}, status=404)
+        return None
     
     # Pick a random top-level assembly
     chosen_item_no = random.choice(list(top_level_item_nos))
+    return chosen_item_no
+
+@api_view(['GET'])
+def bom_tree(request, complexity):
+    """
+    Retrieves a random top-level BOM of the specified complexity
+    """
+    chosen_item_no = retrieve_top_level_item(complexity)
+    if not chosen_item_no:
+        return Response({"error": f"No top-level assemblies found with complexity '{complexity}'"}, status=404)
     bom = BOM.objects.get(parent__item_no=chosen_item_no)
     
     tree = build_tree(bom.parent.item_no)
@@ -61,6 +70,54 @@ def tree_view(request):
         'description': 'This is a tree view of the BOM.',
     }
     return render(request, template, context)
+
+def collect_routing_data_alternative(item_no, level=0, max_nodes=200):
+    """
+    Recursively collect routing data for a BOM and its components
+    """
+    item = Item.objects.get(item_no=item_no)
+    
+    # Initialize data structure
+    data = {
+        'item_no': item_no,
+        'description': item.description,
+        'item_type': item.item_type,
+        'level': level,
+        'work_centers': {},
+        'total_time': 0,
+        'children': []
+    }
+    
+    try:
+        bom = BOM.objects.get(parent__item_no=item_no)
+        # Get all work centers
+        work_centers = WorkCenter.objects.all()
+        
+        # Initialize work center times to 0
+        for wc in work_centers:
+            data['work_centers'][wc.wc_no] = 0
+        
+        # Get routing steps for this BOM
+        routing_steps = RoutingStep.objects.filter(bom=bom)
+        
+        # Populate work center times
+        for step in routing_steps:
+            data['work_centers'][step.wc.wc_no] = step.run_time_min
+            data['total_time'] += step.run_time_min
+        
+        # Recursively process children
+        for line in bom.lines.all():
+            
+            if len(data['children']) < max_nodes:
+                data['children'].append({'quantity': line.quantity,
+                    'component': collect_routing_data_alternative(
+                        line.component.item_no, level+1, max_nodes
+                    )})
+    except BOM.DoesNotExist:
+        # For parts without BOMs, just return the basic data
+        pass
+    
+    return data
 
 
 def collect_routing_data(item_no, level=0, max_nodes=200):
@@ -82,7 +139,6 @@ def collect_routing_data(item_no, level=0, max_nodes=200):
     
     try:
         bom = BOM.objects.get(parent__item_no=item_no)
-        
         # Get all work centers
         work_centers = WorkCenter.objects.all()
         
@@ -100,6 +156,7 @@ def collect_routing_data(item_no, level=0, max_nodes=200):
         
         # Recursively process children
         for line in bom.lines.all():
+
             if len(data['children']) < max_nodes:
                 data['children'].append(
                     collect_routing_data(line.component.item_no, level+1, max_nodes)
